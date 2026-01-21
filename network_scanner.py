@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import argparse
-
 import scapy.all as scapy
 from sshuttle.helpers import verbose
 

