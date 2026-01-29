@@ -16,8 +16,14 @@ import scapy.all as scapy
 
 def process_packet(pkt):
     scapy_packet = scapy.IP(pkt.get_payload())
+    #if scapy_packet.haslayer(scapy.TCP):
     if scapy_packet.haslayer(scapy.Raw):
-        print(scapy_packet.show())
+        if scapy_packet[scapy.TCP].dport == 80:
+            print("HTTP Request")
+            print(scapy_packet.show())
+        elif scapy_packet[scapy.TCP].sport == 80:
+            print("HTTP Response")
+            print(scapy_packet.show())
 
     pkt.accept()
 
