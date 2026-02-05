@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+#set -x
+
+sig_log() {
+    echo "$1 - PID $$" > sigpipe
+}
+
+trap 'sig_log SIGHUP'  SIGHUP
+trap 'sig_log SIGTERM; exit' SIGTERM
+trap 'sig_log SIGINT; exit'  SIGINT
+trap 'sig_log SIGWINCH' SIGWINCH
+trap 'sig_log SIGCONT' SIGCONT
+trap 'sig_log SIGPIPE' SIGPIPE
+trap 'sig_log SIGCHLD; wait -n 2>/dev/null' SIGCHLD
+trap 'sig_log EXIT; kill 0; wait' EXIT
+
+
+### ---  Required packages  --- ###
+packages=("sacli" "jq" "dialog")
+for p in "${packages[@]}"; do
+  command -v "${p}" > /dev/null 2>&1
+
+  [[ $? == 0 ]] && continue
+  [[ $? == 0 ]] || read -rp "$p is not installed. Install? (Y/n): " answer
+
+  case "${answer}" in
+    Y|y|yes|Yes|'')
+      sudo apt install ${p} -y > /dev/null 2>&1
+      [[ $? == 0 ]] || break;
+      ;;
+    n|N|no|No)
+      echo "No"
+      break
+      ;;
+    *)
+      echo "Break"
+      break
+      ;;
+  esac
+done
+
+### --- Check arguments validation--- ###
+#if [[ $# -ne 0 ]]
+#then
+#  while (( $# != 0 )); do
+#    echo "argument $1"
+#    shift
+#  done
+#fi
+
+if [[ $# -eq 0 ]]
+then
+
+  echo -e "provide options \n-l: Laravel\n-s: Sacli\n-i <nic>: -i network-interface"
+fi
+
+declare -i isLaravel=0
+declare -i isInterface=0
+declare -i isSacli=0
+interface=''
+while getopts 'lsii:' opt 2>/dev/null; do
+  case "$opt" in
+    l) isLaravel=1
+      ;;
+    i) isInterface=1
+       interface="${OPTARG}"
+      ;;
+    s) isSacli=1
+      ;;
+    ?) echo "Undefined option"
+      exit
+      ;;
+  esac
+done
+
+if (( isLaravel == 1 || isSacli == 1 ))
+then
+
+  ### --- OpenVPN active connections --- ###
+  mapfile -t connections < <(sacli VPNStatus | jq -c '
+      to_entries[] as $vpn |
+      (
+        $vpn.value.client_list[]? |
+        {
+          instance: $vpn.key,
+          user_name: .[8],
+          user_ip: .[1],
+          vpn_address: .[2],
+          interface: ("as0t" + ($vpn.key | split("_")[1])),
+        }
+      )
+  ')
+
+  ### --- No connections --- ###
+  if [[ ${#connections[@]} -eq 0 ]]
+  then
+
+    echo "no connections";
+    exit 0
+  fi
+
+  ### --- Laravel output --- ###
+  if (( isLaravel == 1 ))
+  then
+
+    mapfile -t interfaces < <(ip -o link show | awk -F': ' '$2 ~ /^as/ {print $2}')
+    echo Interfaces: "${interfaces[@]}"
+    echo ""
+    echo "${connections[@]}" | jq
+    echo "no tcp dump will be activated"
+    exit 0
+  fi
+
+  ### --- OpenVPN users menu --- ###
+  if (( isSacli == 1 ))
+  then
+
+    declare -A menu;
+    for con in "${connections[@]}"; do
+      key=$(echo "$con" | jq -r '.user_name')
+      value=$(echo "$con" | jq -r)
+      menu[$key]=$value
+
+      echo "${key}"
+      echo "${value}" | jq
+    done
+    echo ""
+
+    PS3='Select user: '
+    select key in "${!menu[@]}"; do
+      interface=$(echo "${menu[$key]}" | jq -r '.interface')
+      vpn_address=$(echo "${menu[$key]}" | jq -r '.vpn_address')
+
+      set -x
+      tcpdump -i "$interface" -n inbound | awk '{print $2, $3, $4, $5, $6, $7}' | grep "$vpn_address"
+      set +x
+
+      break
+    done
+  fi
+##################################
+### --- TCP DUMP INTERFACE --- ###
+##################################
+elif (( isInterface == 1))
+then
+
+  declare -i interfaceExists=0
+  mapfile -t interfaces < <(ip -o link show | awk -F':' '{print $2}' | tr -d ' ')
+
+  if [[ -z "${interface}" ]]
+  then
+    echo "need select here"
+    echo "${interfaces[@]}"
+
+    PS3='Select interface: '
+    select int in "${interfaces[@]}"; do
+      interface="${int}"
+      break
+    done
+  fi
+
+  for int in "${interfaces[@]}"; do
+    if [[ "$int" == "${interface}" ]]
+    then
+
+      interfaceExists=1
+      break
+    fi
+  done
+
+  if (( interfaceExists == 0 ))
+  then
+
+    echo "Interface: ${interface} not exists"
+    exit
+  fi
+
+  tcpdump -i "$interface" -n inbound | awk '{print $2, $3, $4, $5, $6, $7; fflush()}' > tcp-pipe 2>/dev/null
+  echo $! | tee tcpdump_fifo.pid
+  wait
+fi

